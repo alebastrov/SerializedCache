@@ -25,6 +25,7 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
             try {
                 //collect parameters for POJO class
                 Map<String, Class<?>> parameters = new HashMap<>();
+                Properties flagsForObject = new Properties();
 
                 //put fields to class
                 for (Field field : value.getClass().getDeclaredFields()) {
@@ -64,8 +65,10 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                         }
                         if (uncompressedBytes.length > annotation.ifMoreThen()) {
                             compressedBytes = ZipUtil.zip(uncompressedBytes);
+                            flagsForObject.put(field.getName(), "compressed");
                         } else {
                             compressedBytes = uncompressedBytes;
+                            flagsForObject.put(field.getName(), "as it is");
                         }
                         invokeMethod(SetGet.SET,
                                 field.getName() + "CompressedCopy",
@@ -81,7 +84,14 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                             new Class[] { field.getType() },
                             new Object[]{ field.get(value) });
                 }
+                //set flags
+                invokeMethod(SetGet.SET,
+                        "flagsForObject",
+                        obj,
+                        new Class[] { Properties.class },
+                        new Object[]{ flagsForObject });
                 //put into cache compressed
+
                 return map.putIfAbsent(key, obj) != null;
             } catch (Exception ex) {
                 throw new CompactingException(ex);
@@ -103,11 +113,15 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
         }
     }
 
-    private void invokeMethod(SetGet setGet, String fieldName, Object target, Class[] paramClasses, Object[] params)
+    private Object invokeMethod(SetGet setGet,
+                              String fieldName,
+                              Object target,
+                              Class[] paramClasses,
+                              Object[] params)
             throws ReflectiveOperationException {
         String nethodName = setGet.getName() + toCapitalize(fieldName);
         Method toBeCalled = target.getClass().getMethod(nethodName, paramClasses);
-        toBeCalled.invoke(target, params);
+        return toBeCalled.invoke(target, params);
     }
 
     private String toCapitalize(String name) {
@@ -139,35 +153,47 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
         Object v = map.get(key);
         if (v != null && v.getClass().getName().endsWith("DeepCopy")) {
             // de-compass:
-            // create original class
             try {
-                Class clazz = Class.forName(v.getClass().getName().replace("DeepCopy", ""));
+                // take the properties
+                Properties flagsForObject = (Properties) invokeMethod(SetGet.GET,
+                        "flagsForObject", v,
+                        new Class[] {},
+                        new Object[] {});
+                // create original class
+                String className = v.getClass().getName().replace("DeepCopy", "");
+                Class clazz = cachedClasses.get(className);
+                if (clazz == null) {
+                    clazz = Class.forName(className);
+                    cachedClasses.putIfAbsent(className, clazz);
+                }
                 Object toBeSetUp = clazz.newInstance();
                 // copy all fields
                 for (Field field : clazz.getDeclaredFields()) {
                     field.setAccessible(true);
                     if (field.getAnnotation(MayBeCompacted.class) != null) {
-                        Method toBeInvoked = v.getClass().getMethod("get" + toCapitalize(field.getName()) + "CompressedCopy",
-                                new Class[] {});
-                        byte[] compressedBytes = (byte[]) toBeInvoked.invoke(v, new Object[] {});
+                        byte[] compressedBytes = (byte[]) invokeMethod(SetGet.GET,
+                                field.getName() + "CompressedCopy",
+                                v,
+                                new Class[] {},
+                                new Object[] {});
                         byte[] uncompressedBytes;
-                        try {
+                        if ("compressed".equals(flagsForObject.get(field.getName()))) {
                             uncompressedBytes = ZipUtil.unZip(compressedBytes);
-                        } catch (Exception ex) {
+                        } else {
                             uncompressedBytes = compressedBytes;
                         }
-                        //de-compress and setup
+                        // set original value up
                         if (field.getType() == String.class) {
-                             String value = new String(uncompressedBytes, StandardCharsets.UTF_8);
-                             field.set(toBeSetUp, value);
+                            String value = new String(uncompressedBytes, StandardCharsets.UTF_8);
+                            field.set(toBeSetUp, value);
                         } else {
                             field.set(toBeSetUp, uncompressedBytes);
                         }
                         continue;
                     }
-                    Method toBeInvoked = v.getClass().getMethod("get" + toCapitalize(field.getName()), new Class[] {});
+                    Object value = invokeMethod(SetGet.GET, field.getName(), v, new Class[] {}, new Object[] {});
                     //copy usual field
-                    field.set(toBeSetUp, toBeInvoked.invoke(v, new Object[] {}));
+                    field.set(toBeSetUp, value);
                 }
                 return (V) toBeSetUp;
             } catch (Exception ex) {

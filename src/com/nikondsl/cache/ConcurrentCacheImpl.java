@@ -11,6 +11,9 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import static com.nikondsl.cache.ConcurrentCacheImpl.SetGet.GET;
+import static com.nikondsl.cache.ConcurrentCacheImpl.SetGet.SET;
+
 public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
     private ConcurrentMap<K, Object> map = new ConcurrentHashMap<>();
     private ConcurrentMap<String, Class> cachedClasses = new ConcurrentHashMap<>();
@@ -70,7 +73,7 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                             compressedBytes = uncompressedBytes;
                             flagsForObject.put(field.getName(), "as it is");
                         }
-                        invokeMethod(SetGet.SET,
+                        invokeMethod(SET,
                                 field.getName() + "CompressedCopy",
                                 obj,
                                 new Class[] { byte[].class },
@@ -78,14 +81,14 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                         continue;
                     }
                     //copy original value
-                    invokeMethod(SetGet.SET,
+                    invokeMethod(SET,
                             field.getName(),
                             obj,
                             new Class[] { field.getType() },
                             new Object[]{ field.get(value) });
                 }
                 //set flags
-                invokeMethod(SetGet.SET,
+                invokeMethod(SET,
                         "flagsForObject",
                         obj,
                         new Class[] { Properties.class },
@@ -111,6 +114,11 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
         public String getName() {
             return name;
         }
+    }
+
+    private Object invokeGet(String fieldName, Object target)
+            throws ReflectiveOperationException {
+        return invokeMethod(GET, fieldName, target, new Class[] {}, new Object[] {});
     }
 
     private Object invokeMethod(SetGet setGet,
@@ -155,10 +163,7 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
             // de-compass:
             try {
                 // take the properties
-                Properties flagsForObject = (Properties) invokeMethod(SetGet.GET,
-                        "flagsForObject", v,
-                        new Class[] {},
-                        new Object[] {});
+                Properties flagsForObject = (Properties) invokeGet("flagsForObject", v);
                 // create original class
                 String className = v.getClass().getName().replace("DeepCopy", "");
                 Class clazz = cachedClasses.get(className);
@@ -171,11 +176,7 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                 for (Field field : clazz.getDeclaredFields()) {
                     field.setAccessible(true);
                     if (field.getAnnotation(MayBeCompacted.class) != null) {
-                        byte[] compressedBytes = (byte[]) invokeMethod(SetGet.GET,
-                                field.getName() + "CompressedCopy",
-                                v,
-                                new Class[] {},
-                                new Object[] {});
+                        byte[] compressedBytes = (byte[]) invokeGet(field.getName() + "CompressedCopy", v);
                         byte[] uncompressedBytes;
                         if ("compressed".equals(flagsForObject.get(field.getName()))) {
                             uncompressedBytes = ZipUtil.unZip(compressedBytes);
@@ -191,7 +192,7 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                         }
                         continue;
                     }
-                    Object value = invokeMethod(SetGet.GET, field.getName(), v, new Class[] {}, new Object[] {});
+                    Object value = invokeGet(field.getName(), v);
                     //copy usual field
                     field.set(toBeSetUp, value);
                 }

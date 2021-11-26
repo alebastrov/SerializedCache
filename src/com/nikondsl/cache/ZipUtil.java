@@ -7,7 +7,11 @@ import java.util.zip.Deflater;
 import java.util.zip.Inflater;
 
 public class ZipUtil {
-    public static byte[] zip(byte[] uncompressedBytes) throws IOException {
+
+    public static byte[] zip(boolean doNotCompact, byte[] uncompressedBytes) throws IOException {
+        if (doNotCompact) {
+            return uncompressedBytes;
+        }
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try {
             Deflater compresser = new Deflater();
@@ -25,7 +29,10 @@ public class ZipUtil {
         return baos.toByteArray();
     }
 
-    public static byte[] unZip(byte[] compressedBytes) throws IOException, DataFormatException {
+    public static byte[] unZip(boolean doNotCompact, byte[] compressedBytes) throws IOException, DataFormatException {
+        if (doNotCompact) {
+            return compressedBytes;
+        }
         Inflater decompresser = new Inflater();
         decompresser.setInput(compressedBytes);
         ByteArrayOutputStream out = new ByteArrayOutputStream(compressedBytes.length);

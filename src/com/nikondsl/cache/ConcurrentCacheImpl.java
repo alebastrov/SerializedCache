@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +28,8 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
     private static final String FLAGS = "flagsForObject";
     private ConcurrentMap<K, Object> map = new ConcurrentHashMap<>();
     private ConcurrentMap<String, Class> cachedClasses = new ConcurrentHashMap<>();
+
+    private boolean doNotCompact = false;
 
     @Override
     public boolean put(K key, V value) throws CompactingException {
@@ -55,6 +56,14 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
         map.remove(key);
     }
 
+    @Override
+    public void flush() {
+        map.clear();
+    }
+
+    public Object getRawObject(K key) {
+        return map.get(key);
+    }
 
     private Object getCompactedCopy(Object value) throws CompactingException {
         // compact:
@@ -104,13 +113,13 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                         String uncompressedValue = (String) field.get(value);
                         byte[] uncompressedBytes = uncompressedValue.getBytes(StandardCharsets.UTF_8);
                         if (canBeCompressed(uncompressedBytes, annotation)) {
-                            compressedBytes = ZipUtil.zip(uncompressedBytes);
+                            compressedBytes = ZipUtil.zip(doNotCompact, uncompressedBytes);
                             flagsForObject.put(field.getName(), "compressed");
                         } else compressedBytes = uncompressedBytes;
                     } else if (field.getType() == byte[].class) {
                         byte[] uncompressedBytes = (byte[]) field.get(value);
                         if (canBeCompressed(uncompressedBytes, annotation)) {
-                            compressedBytes = ZipUtil.zip(uncompressedBytes);
+                            compressedBytes = ZipUtil.zip(doNotCompact, uncompressedBytes);
                             flagsForObject.put(field.getName(), "compressed");
                         } else compressedBytes = uncompressedBytes;
                     } else {
@@ -118,7 +127,7 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                         byte[] uncompressedBytes = serializeObject((Serializable) field.get(value));
                         flagsForObject.put(field.getName(), "serialized");
                         if (canBeCompressed(uncompressedBytes, annotation)) {
-                            compressedBytes = ZipUtil.zip(uncompressedBytes);
+                            compressedBytes = ZipUtil.zip(doNotCompact, uncompressedBytes);
                             flagsForObject.put(field.getName(), "serialized/compressed");
                         } else compressedBytes = uncompressedBytes;
                     }
@@ -150,7 +159,7 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
       return uncompressedBytes.length > annotation.ifMoreThen();
     }
 
-    private byte[] serializeObject(Serializable obj) throws IOException {
+    public byte[] serializeObject(Serializable obj) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         ObjectOutputStream oos = new ObjectOutputStream(bos);
         oos.writeObject(obj);
@@ -184,14 +193,14 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                     byte[] compressedBytes = (byte[]) invokeGet(field.getName() + "CompressedCopy", v);
                     byte[] uncompressedBytes;
                     if ("compressed".equals(flagsForObject.get(field.getName()))) {
-                        uncompressedBytes = ZipUtil.unZip(compressedBytes);
+                        uncompressedBytes = ZipUtil.unZip(doNotCompact, compressedBytes);
                     } else if ("original".equals(flagsForObject.get(field.getName()))) {
                         uncompressedBytes = compressedBytes;
                     } else {
                         //serialized/compressed or just serialized
                         byte[] toDeserialize;
                         if ("serialized/compressed".equals(flagsForObject.get(field.getName()))) {
-                            toDeserialize = ZipUtil.unZip(compressedBytes);
+                            toDeserialize = ZipUtil.unZip(doNotCompact, compressedBytes);
                         } else {
                             toDeserialize = compressedBytes;
                         }
@@ -264,9 +273,18 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
             final Map<String, Class<?>> properties) {
 
         BeanGenerator beanGenerator = new BeanGenerator();
+
         /* use our own hard coded class name instead of a real naming policy */
         beanGenerator.setNamingPolicy((prefix, source, key, names) -> className);
         BeanGenerator.addProperties(beanGenerator, properties);
         return (Class<?>) beanGenerator.createClass();
+    }
+
+    public boolean isDoNotCompact() {
+        return doNotCompact;
+    }
+
+    public void setDoNotCompact(boolean doNotCompact) {
+        this.doNotCompact = doNotCompact;
     }
 }

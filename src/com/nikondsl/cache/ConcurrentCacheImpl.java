@@ -15,6 +15,8 @@ import static com.nikondsl.cache.ConcurrentCacheImpl.SetGet.GET;
 import static com.nikondsl.cache.ConcurrentCacheImpl.SetGet.SET;
 
 public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
+    private static final String DEEP_COPY = "DeepCopy";
+    private static final String FLAGS = "flagsForObject";
     private ConcurrentMap<K, Object> map = new ConcurrentHashMap<>();
     private ConcurrentMap<String, Class> cachedClasses = new ConcurrentHashMap<>();
 
@@ -43,12 +45,12 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                     //add new synthetic field
                     parameters.put(field.getName() + "CompressedCopy", byte[].class);
                 }
-                parameters.put("flagsForObject", Properties.class);
+                parameters.put(FLAGS, Properties.class);
                 //create a new class
-                Class clazz = cachedClasses.get(value.getClass().getCanonicalName() + "DeepCopy");
+                Class clazz = cachedClasses.get(value.getClass().getCanonicalName() + DEEP_COPY);
                 if (clazz == null) {
-                    clazz = createBeanClass(value.getClass().getCanonicalName() + "DeepCopy", parameters);
-                    cachedClasses.putIfAbsent(value.getClass().getCanonicalName() + "DeepCopy", clazz);
+                    clazz = createBeanClass(value.getClass().getCanonicalName() + DEEP_COPY, parameters);
+                    cachedClasses.putIfAbsent(value.getClass().getCanonicalName() + DEEP_COPY, clazz);
                 }
                 Object obj = clazz.newInstance();
                 //init a class with values
@@ -88,13 +90,9 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                             new Object[]{ field.get(value) });
                 }
                 //set flags
-                invokeMethod(SET,
-                        "flagsForObject",
-                        obj,
-                        new Class[] { Properties.class },
-                        new Object[]{ flagsForObject });
-                //put into cache compressed
+                invokeMethod(SET, FLAGS, obj, new Class[] { Properties.class }, new Object[] { flagsForObject });
 
+                //put into cache compressed
                 return map.putIfAbsent(key, obj) != null;
             } catch (Exception ex) {
                 throw new CompactingException(ex);
@@ -103,69 +101,18 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
         //put into cache usual
         return map.putIfAbsent(key, value) != null;
     }
-    public enum SetGet {
-        SET("set"), GET("get");
-
-        private String name;
-
-        SetGet(String name) {
-            this.name = name;
-        }
-        public String getName() {
-            return name;
-        }
-    }
-
-    private Object invokeGet(String fieldName, Object target)
-            throws ReflectiveOperationException {
-        return invokeMethod(GET, fieldName, target, new Class[] {}, new Object[] {});
-    }
-
-    private Object invokeMethod(SetGet setGet,
-                              String fieldName,
-                              Object target,
-                              Class[] paramClasses,
-                              Object[] params)
-            throws ReflectiveOperationException {
-        String nethodName = setGet.getName() + toCapitalize(fieldName);
-        Method toBeCalled = target.getClass().getMethod(nethodName, paramClasses);
-        return toBeCalled.invoke(target, params);
-    }
-
-    private String toCapitalize(String name) {
-        if (name == null || name.length() < 1) {
-            throw new IllegalArgumentException("field name is illegal");
-        }
-        if (name.length() > 1) {
-            return name.substring(0, 1).toUpperCase(Locale.ROOT) + name.substring(1);
-        }
-        return name.substring(0, 1).toUpperCase(Locale.ROOT);
-    }
-
-    public static Class<?> createBeanClass(
-            /* fully qualified class name */
-            final String className,
-            /* bean properties, name -> type */
-            final Map<String, Class<?>> properties) {
-
-        BeanGenerator beanGenerator = new BeanGenerator();
-        /* use our own hard coded class name instead of a real naming policy */
-        beanGenerator.setNamingPolicy((prefix, source, key, names) -> className);
-        BeanGenerator.addProperties(beanGenerator, properties);
-        return (Class<?>) beanGenerator.createClass();
-    }
 
     @Override
     public V get(K key) throws CompactingException {
 
         Object v = map.get(key);
-        if (v != null && v.getClass().getName().endsWith("DeepCopy")) {
+        if (v != null && v.getClass().getName().endsWith(DEEP_COPY)) {
             // de-compass:
             try {
                 // take the properties
-                Properties flagsForObject = (Properties) invokeGet("flagsForObject", v);
+                Properties flagsForObject = (Properties) invokeGet(FLAGS, v);
                 // create original class
-                String className = v.getClass().getName().replace("DeepCopy", "");
+                String className = v.getClass().getName().replace(DEEP_COPY, "");
                 Class clazz = cachedClasses.get(className);
                 if (clazz == null) {
                     clazz = Class.forName(className);
@@ -212,5 +159,57 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
     @Override
     public void remove(K key) {
         map.remove(key);
+    }
+
+    public enum SetGet {
+        SET("set"), GET("get");
+
+        private String name;
+
+        SetGet(String name) {
+            this.name = name;
+        }
+        public String getName() {
+            return name;
+        }
+    }
+
+    private Object invokeGet(String fieldName, Object target)
+            throws ReflectiveOperationException {
+        return invokeMethod(GET, fieldName, target, new Class[] {}, new Object[] {});
+    }
+
+    private Object invokeMethod(SetGet setGet,
+                                String fieldName,
+                                Object target,
+                                Class[] paramClasses,
+                                Object[] params)
+            throws ReflectiveOperationException {
+        String nethodName = setGet.getName() + toCapitalize(fieldName);
+        Method toBeCalled = target.getClass().getMethod(nethodName, paramClasses);
+        return toBeCalled.invoke(target, params);
+    }
+
+    private String toCapitalize(String name) {
+        if (name == null || name.length() < 1) {
+            throw new IllegalArgumentException("field name is illegal");
+        }
+        if (name.length() > 1) {
+            return name.substring(0, 1).toUpperCase(Locale.ROOT) + name.substring(1);
+        }
+        return name.substring(0, 1).toUpperCase(Locale.ROOT);
+    }
+
+    public static Class<?> createBeanClass(
+            /* fully qualified class name */
+            final String className,
+            /* bean properties, name -> type */
+            final Map<String, Class<?>> properties) {
+
+        BeanGenerator beanGenerator = new BeanGenerator();
+        /* use our own hard coded class name instead of a real naming policy */
+        beanGenerator.setNamingPolicy((prefix, source, key, names) -> className);
+        BeanGenerator.addProperties(beanGenerator, properties);
+        return (Class<?>) beanGenerator.createClass();
     }
 }

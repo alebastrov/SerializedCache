@@ -1,17 +1,18 @@
 import com.nikondsl.cache.MayBeCompacted;
 
+import java.io.Serializable;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 @MayBeCompacted
-public class Holder {
+public class Holder implements Serializable {
     private int someNumber = 1;
     @MayBeCompacted(ifMoreThen = 120)
     private String veryBigText = "default value";
     private String usual = "default value";
-    @MayBeCompacted
+    @MayBeCompacted(ifMoreThen = 200)
     private List<InnerHolder> inners = new ArrayList<>();
     @MayBeCompacted
     private byte[] someBytes = "new byte[] values".getBytes(StandardCharsets.UTF_8);
@@ -67,10 +68,8 @@ public class Holder {
         this.inners = inners;
     }
 
-    @MayBeCompacted
-    public static class InnerHolder {
+    public static class InnerHolder implements Serializable {
         private Integer id;
-        @MayBeCompacted
         private String expression;
 
         public Integer getId() {

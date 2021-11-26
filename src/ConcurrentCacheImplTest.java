@@ -30,6 +30,4 @@ public class ConcurrentCacheImplTest {
         System.err.println(cache.get("a"));
         System.err.println(cache.get("b"));
     }
-
-
 }

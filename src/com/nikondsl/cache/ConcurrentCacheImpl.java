@@ -1,6 +1,16 @@
 package com.nikondsl.cache;
 
+import com.sun.beans.decoder.ValueObject;
 import net.sf.cglib.beans.BeanGenerator;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -62,10 +72,14 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                     parameters.put(field.getName(), field.getType());
                     continue;
                 }
-                if (field.getType() != String.class && field.getType() != byte[].class) {
-                    throw new CompactingException("Only strings and byte[] are supported");
-                }
                 field.setAccessible(true);
+                if (field.getType() != String.class && field.getType() != byte[].class) {
+                    if (!(field.get(value) instanceof Serializable)) {
+                        throw new IllegalArgumentException("Only strings, byte[] and serializable objects " +
+                                "might be compacted, but " + field.getType().getCanonicalName() + " provided");
+                    }
+                }
+
                 //add new synthetic field
                 parameters.put(field.getName() + "CompressedCopy", byte[].class);
             }
@@ -85,19 +99,28 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                     //set synthetic field
                     //compact old field value
                     byte[] compressedBytes;
-                    byte[] uncompressedBytes;
+                    flagsForObject.put(field.getName(), "original");
                     if (field.getType() == String.class) {
                         String uncompressedValue = (String) field.get(value);
-                        uncompressedBytes = uncompressedValue.getBytes(StandardCharsets.UTF_8);
+                        byte[] uncompressedBytes = uncompressedValue.getBytes(StandardCharsets.UTF_8);
+                        if (canBeCompressed(uncompressedBytes, annotation)) {
+                            compressedBytes = ZipUtil.zip(uncompressedBytes);
+                            flagsForObject.put(field.getName(), "compressed");
+                        } else compressedBytes = uncompressedBytes;
+                    } else if (field.getType() == byte[].class) {
+                        byte[] uncompressedBytes = (byte[]) field.get(value);
+                        if (canBeCompressed(uncompressedBytes, annotation)) {
+                            compressedBytes = ZipUtil.zip(uncompressedBytes);
+                            flagsForObject.put(field.getName(), "compressed");
+                        } else compressedBytes = uncompressedBytes;
                     } else {
-                        uncompressedBytes = (byte[]) field.get(value);
-                    }
-                    if (uncompressedBytes.length > annotation.ifMoreThen()) {
-                        compressedBytes = ZipUtil.zip(uncompressedBytes);
-                        flagsForObject.put(field.getName(), "compressed");
-                    } else {
-                        compressedBytes = uncompressedBytes;
-                        flagsForObject.put(field.getName(), "as it is");
+                        //try to serialize object
+                        byte[] uncompressedBytes = serializeObject((Serializable) field.get(value));
+                        flagsForObject.put(field.getName(), "serialized");
+                        if (canBeCompressed(uncompressedBytes, annotation)) {
+                            compressedBytes = ZipUtil.zip(uncompressedBytes);
+                            flagsForObject.put(field.getName(), "serialized/compressed");
+                        } else compressedBytes = uncompressedBytes;
                     }
                     invokeMethod(SET,
                             field.getName() + "CompressedCopy",
@@ -123,6 +146,24 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
         }
     }
 
+    private boolean canBeCompressed(byte[] uncompressedBytes, MayBeCompacted annotation) {
+      return uncompressedBytes.length > annotation.ifMoreThen();
+    }
+
+    private byte[] serializeObject(Serializable obj) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(bos);
+        oos.writeObject(obj);
+        oos.flush();
+        return bos.toByteArray();
+    }
+
+    private Serializable deserializeObject(byte[] bytes) throws IOException, ClassNotFoundException {
+        ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
+        ObjectInputStream in = new ObjectInputStream(bis);
+        return (Serializable) in.readObject();
+    }
+
     private V getOriginalCopy(Object v) throws CompactingException {
         // de-compass:
         try {
@@ -144,8 +185,19 @@ public class ConcurrentCacheImpl<K, V> implements Cache<K, V> {
                     byte[] uncompressedBytes;
                     if ("compressed".equals(flagsForObject.get(field.getName()))) {
                         uncompressedBytes = ZipUtil.unZip(compressedBytes);
-                    } else {
+                    } else if ("original".equals(flagsForObject.get(field.getName()))) {
                         uncompressedBytes = compressedBytes;
+                    } else {
+                        //serialized/compressed or just serialized
+                        byte[] toDeserialize;
+                        if ("serialized/compressed".equals(flagsForObject.get(field.getName()))) {
+                            toDeserialize = ZipUtil.unZip(compressedBytes);
+                        } else {
+                            toDeserialize = compressedBytes;
+                        }
+                        Serializable object = deserializeObject(toDeserialize);
+                        field.set(toBeSetUp, object);
+                        continue;
                     }
                     // set original value up
                     if (field.getType() == String.class) {

@@ -19,7 +19,7 @@ public class ConcurrentCacheImplTest {
         putManyObjects(cache);
 //        cache.flush();
         System.gc();
-
+        System.err.println(cache.get(123));
 long time = System.currentTimeMillis();
         long memBefore = Runtime.getRuntime().freeMemory();
         getManyObjects(cache);
@@ -63,6 +63,7 @@ long time = System.currentTimeMillis();
 
     private static Holder createHolder(int i) {
         Holder holder = new Holder();
+        holder.setSomeAtomicNumber(999);
         holder.setVeryBigText("XPorter");
         holder.setSomeNumber(i);
         holder.setUsual("Something usual #" + i);

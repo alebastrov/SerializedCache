@@ -5,10 +5,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @MayBeCompacted
 public class Holder implements Serializable {
     private int someNumber = 1;
+    private AtomicInteger someAtomicNumber = new AtomicInteger();
     @MayBeCompacted(ifMoreThen = 120)
     private String veryBigText = "default value";
     private String usual = "default value";
@@ -53,10 +55,19 @@ public class Holder implements Serializable {
         return inners;
     }
 
+    public int getSomeAtomicNumber() {
+        return someAtomicNumber.get();
+    }
+
+    public void setSomeAtomicNumber(int someAtomicNumber) {
+        this.someAtomicNumber.set(someAtomicNumber);
+    }
+
     @Override
     public String toString() {
         return "Holder{" +
                 "someNumber=" + someNumber +
+                ", someAtomicNumber=" + someAtomicNumber +
                 ", veryBigText='" + veryBigText + '\'' +
                 ", usual='" + usual + '\'' +
                 ", inners=" + inners +
